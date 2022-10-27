@@ -30,7 +30,7 @@ namespace PrnViewer
         }
 
         PrnFileHeader header = new();
-        int[] inkcounts = Array.Empty<int>();
+        Int64[] inkcounts = Array.Empty<Int64>();
         private void openButton_Click(object sender, RoutedEventArgs e)
         {
             string oldpath = filepathTextBox.Text;
@@ -52,12 +52,20 @@ namespace PrnViewer
                     return;
                 }
 
-                inkcounts = PrnFileReader.ReadInkCount(ofd.FileName);
+                //inkcounts = PrnFileReader.ReadInkCount(ofd.FileName);
+                CPrnProcss.ReadInkCount(ofd.FileName, (Int64[] v) => {
+                    inkcounts = v;
+                    Dispatcher.Invoke(() =>{
+                        UpdatePrnInfo();
+                    });
+                });
                 UpdatePrnInfo();
                 Task.Run(new Action(()=>{
-                    PrnFileReader.CalcBitmap(ofd.FileName, (int pixelWidth, int pixelHeight, double dpiX, double dpiY, PixelFormat pixelFormat, Array pixels, int stride) =>
+                    //PrnFileReader.CalcBitmap(ofd.FileName, 
+                    CPrnProcss.CalcBitmap(ofd.FileName,
+                        (int pixelWidth, int pixelHeight, double dpiX, double dpiY, PixelFormat pixelFormat, Array pixels, int stride) =>
                     {
-                        Dispatcher.Invoke(() => {
+                        Dispatcher.BeginInvoke(() => {
                             BitmapSource bitmap = BitmapSource.Create(pixelWidth, pixelHeight,
                                     dpiX, dpiY, pixelFormat, null,
                                     pixels, stride);
@@ -94,7 +102,7 @@ namespace PrnViewer
             }
         }
 
-        private double CaclInkml(int v)
+        private double CaclInkml(Int64 v)
         {
             try
             {

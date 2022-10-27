@@ -4,6 +4,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Controls;
@@ -88,7 +89,7 @@ namespace PrnViewer
             }
             return prnFileHeader;
         }
-        static public int[] ReadInkCount(string filename)
+        static public void ReadInkCount(string filename, Action<Int64[]> update)
         {
             using (FileStream fileStream = new FileStream(filename, FileMode.Open))
             {
@@ -97,9 +98,9 @@ namespace PrnViewer
                 var headerdata = br.ReadBytes(120);
                 prnFileHeader.InitFromBytes(headerdata);
                 if (!prnFileHeader.IsOk())
-                    return Array.Empty<int>();
+                    return ;
 
-                int[] inkcounts = new int[prnFileHeader.Colors];
+                Int64[] inkcounts = new Int64[prnFileHeader.Colors];
 
                 for(int i = 0; i < prnFileHeader.Height; i++)
                 {
@@ -109,8 +110,12 @@ namespace PrnViewer
                         int dots = CalcDots(linedata);
                         inkcounts[j] += dots;
                     }
+                    if((i & 0x3ff) == 0x3ff)
+                    {
+                        update?.Invoke(inkcounts);
+                    }
                 }
-                return inkcounts;
+                update?.Invoke(inkcounts);
             }
         }
 
@@ -218,10 +223,58 @@ namespace PrnViewer
                         rawImage, rawStride);
             }
         }
+    }
 
-        private static int kcmy2bgr32(byte v1, byte v2, byte v3, byte v4)
+    internal class CPrnProcss
+    {
+        [DllImport("PrnDataProcess.dll", CallingConvention= CallingConvention.Cdecl)]
+        static extern void ReadPrnInkCount(string filename, IntPtr inkcounts, Action action);
+
+        static public void ReadInkCount(string filename, Action<Int64[]> update)
         {
-            throw new NotImplementedException();
+            var header = PrnFileReader.ReadHeader(filename);
+            if (!header.IsOk())
+                return ;
+
+            Int64[] inkcounts = new Int64[header.Colors];
+            for (int i = 0; i < inkcounts.Length; i++)
+                inkcounts[i] = 0;
+
+            var pinkcounts = Marshal.AllocHGlobal(inkcounts.Length*8);
+            Marshal.Copy(inkcounts, 0,  pinkcounts, inkcounts.Length);
+            ReadPrnInkCount(filename, pinkcounts, () => {
+                Marshal.Copy(pinkcounts, inkcounts, 0, inkcounts.Length);
+                update?.Invoke(inkcounts);
+            });
+        }
+
+
+        [DllImport("PrnDataProcess.dll", CallingConvention = CallingConvention.Cdecl)]
+        static extern void CalcPrnImage(string filename, IntPtr rawImage, Action action);
+
+        internal static void CalcBitmap(string filename, Action<int, int, double, double, PixelFormat, Array, int> update)
+        {
+            var prnFileHeader = PrnFileReader.ReadHeader(filename);
+            if (!prnFileHeader.IsOk())
+                return ;
+
+            int width = (prnFileHeader.Width + 15) / 16;
+            int height = (prnFileHeader.Height + 15) / 16;
+            int XDpi = prnFileHeader.ResolutionX / 16;
+            int YDpi = prnFileHeader.ResolutionY / 16;
+
+            var pf = PixelFormats.Cmyk32;
+            var rawStride = (width * pf.BitsPerPixel + 7) / 8;
+            var rawImage = new byte[rawStride * height];
+
+            var ptr = Marshal.AllocHGlobal(rawStride * height);
+            CalcPrnImage(filename, ptr, () => { 
+
+            Marshal.Copy(ptr, rawImage, 0, rawStride * height);
+            update?.Invoke(width, height,
+                    XDpi, YDpi, pf,
+                    rawImage, rawStride);
+            });
         }
     }
 }
