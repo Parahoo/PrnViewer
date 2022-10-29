@@ -35,6 +35,10 @@
                         <Button x:Name="inkCalcButton" Margin="2" Content="计算" Click="inkCalcButton_Click"></Button>
                     </StackPanel>
                     <TextBlock Margin="20" x:Name="prninfoTextBlock" Style="{DynamicResource MaterialDesignHelperTextBlock}" ></TextBlock>
+                    <Grid x:Name="calcGrid"  Width="50" Height="50">
+                        <ProgressBar x:Name="calcProgressBar" Value="0" Style="{DynamicResource MaterialDesignCircularProgressBar}" Width="50" Height="50"/>
+                        <TextBlock Text="{Binding Value, ElementName=calcProgressBar}" HorizontalAlignment="Center" VerticalAlignment="Center"></TextBlock>
+                    </Grid>
                 </StackPanel>
                 
             </materialDesign:Card>

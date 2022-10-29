@@ -27,6 +27,7 @@ namespace PrnViewer
             AppSetting.Default = AppSetting.Load();
             plTextBox.Text = AppSetting.Default.Pl.ToString();
             filepathTextBox.Text = AppSetting.Default.PrnFilePath;
+            calcGrid.Visibility = Visibility.Collapsed;
         }
 
         PrnFileHeader header = new();
@@ -51,48 +52,77 @@ namespace PrnViewer
                     MessageBox.Show(this, "Prn文件格式错误");
                     return;
                 }
+                img.Source = null;
+                UpdatePrnInfo();
 
-                //inkcounts = PrnFileReader.ReadInkCount(ofd.FileName);
-                CPrnProcss.ReadInkCount(ofd.FileName, (Int64[] v) => {
-                    inkcounts = v;
+                Task.Run(() =>{
+                    Dispatcher.Invoke(() =>
+                    {
+                        calcGrid.Visibility = Visibility.Visible;
+                        calcProgressBar.Value = 0;
+                        calcProgressBar.IsIndeterminate = true;
+                    });
+
+                    CPrnProcss.CalcBitmapAndInkDots(ofd.FileName,
+                        (int pixelWidth, int pixelHeight, double dpiX, double dpiY, PixelFormat pixelFormat, Array pixels, int stride) =>
+                        {
+                            Dispatcher.BeginInvoke(() =>
+                            {
+                                if (img.Source == null)
+                                {
+                                    WriteableBitmap bitmap = new(WriteableBitmap.Create(pixelWidth, pixelHeight,
+                                        dpiX, dpiY, pixelFormat, null,
+                                        pixels, stride));
+                                    img.Source = bitmap;
+                                }
+                                else
+                                {
+                                    WriteableBitmap bitmap = img.Source as WriteableBitmap;
+                                    var rect = new Int32Rect(0, 0, pixelWidth, pixelHeight);
+                                    bitmap.WritePixels(rect, pixels, stride, 0);
+                                }
+                            });
+                        },
+                        (Int64[] v) => {
+                            inkcounts = v;
+                            Dispatcher.BeginInvoke(() =>
+                            {
+                                UpdatePrnInfo();
+                            });
+                        },
+                        (int percent) =>{
+                            Dispatcher.BeginInvoke(() =>
+                            {
+                                calcProgressBar.Value = percent;
+                            });
+                        });
                     Dispatcher.Invoke(() =>{
-                        UpdatePrnInfo();
+                        calcGrid.Visibility = Visibility.Collapsed;
+                        calcProgressBar.IsIndeterminate = false;
+
                     });
                 });
-                UpdatePrnInfo();
-                Task.Run(new Action(()=>{
-                    //PrnFileReader.CalcBitmap(ofd.FileName, 
-                    CPrnProcss.CalcBitmap(ofd.FileName,
-                        (int pixelWidth, int pixelHeight, double dpiX, double dpiY, PixelFormat pixelFormat, Array pixels, int stride) =>
-                    {
-                        Dispatcher.BeginInvoke(() => {
-                            BitmapSource bitmap = BitmapSource.Create(pixelWidth, pixelHeight,
-                                    dpiX, dpiY, pixelFormat, null,
-                                    pixels, stride);
-                            img.Source = bitmap;
-                        });
-                    });
-                }));
             }
         }
 
         private void UpdatePrnInfo()
         {
-            if (header == null)
-                return;
-            if(inkcounts == null)
-                return;
 
             try
             {
-                string info = header.ToString() + "\r\n";
+                string info = "";
+                if(header != null)
+                    info += header.ToString() + "\r\n";
 
-                string[] defaultinkname = { "K", "C", "M", "Y" };
-                for (int i = 0; i < inkcounts.Length; i++)
+                if (inkcounts != null)
                 {
-                    string inkname = ((i < 4) ? defaultinkname[i] : ("颜色" + (i + 1)));
-                    double inkml = CaclInkml(inkcounts[i]);
-                    info += string.Format("{0} : {1} dots => {2:F4} ml\r\n", inkname, inkcounts[i], inkml);
+                    string[] defaultinkname = { "K", "C", "M", "Y" };
+                    for (int i = 0; i < inkcounts.Length; i++)
+                    {
+                        string inkname = ((i < 4) ? defaultinkname[i] : ("颜色" + (i + 1)));
+                        double inkml = CaclInkml(inkcounts[i]);
+                        info += string.Format("{0} : {1} dots => {2:F4} ml\r\n", inkname, inkcounts[i], inkml);
+                    }
                 }
 
                 prninfoTextBlock.Text = info;

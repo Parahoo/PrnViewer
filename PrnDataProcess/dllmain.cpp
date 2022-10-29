@@ -56,6 +56,25 @@ static inline int BitCount2(short v)
     return n;
 }
 
+static const int ones[] = {
+        0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
+        1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+        1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+        2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+        1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+        2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+        2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+        3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+        1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
+        2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+        2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+        3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+        2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6,
+        3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+        3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7,
+        4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8
+};
+
 static int CalcDots(uint8_t* linedata, size_t size)
 {
     int dots = 0;
@@ -187,6 +206,227 @@ extern "C" __declspec(dllexport) void _stdcall CalcPrnImage(const char* pfilenam
             }
         }
         if(update)
+            update();
+    }
+}
+
+extern "C" __declspec(dllexport) void _stdcall CalcPrnImageAndInkDots(const char* pfilename, int XScale, int YScale, uint8_t * rawImage, uint64_t * pinkcounts, int *percent, updatefunc update)
+{
+    std::ifstream fs(pfilename, std::ios::binary | std::ios::in);
+    if (fs.good())
+        //FILE* pFile = fopen(pfilename, "rb");
+        //if(pFile)
+    {
+        PrnFileHeader prnFileHeader;
+        fs.read((char*)&prnFileHeader, prnheadersize);
+        //fread((char *) & prnFileHeader, 1, prnheadersize, pFile);
+        if (!prnFileHeader.IsOk())
+            return;
+        int width = (prnFileHeader.Width + XScale-1) / XScale;
+        int height = (prnFileHeader.Height + YScale-1) / YScale;
+
+        auto rawStride = width * 4;
+
+        std::unique_ptr<uint32_t[]> k(new uint32_t[width]);
+        std::unique_ptr<uint32_t[]> c(new uint32_t[width]);
+        std::unique_ptr<uint32_t[]> m(new uint32_t[width]);
+        std::unique_ptr<uint32_t[]> y(new uint32_t[width]);
+        uint32_t* pixvalue[4] = { k.get(), c.get(), m.get(), y.get() };
+
+        auto linesize = prnFileHeader.BytesPerLine;
+        std::unique_ptr<uint8_t[]> buf(new uint8_t[linesize]);
+
+        auto func8 = [&]() {
+            auto linedata = buf.get();
+            uint8_t* linedata_8 = (uint8_t*)linedata;
+
+            int pixmaxv = XScale * YScale;
+
+            int rawpos = 0;
+            for (int i = 0; i < prnFileHeader.Height; i++)
+            {
+                if ((i & 0x07) == 0)
+                {
+                    for (int j = 0; j < 4; j++)
+                    {
+                        for (int k = 0; k < width; k++)
+                            pixvalue[j][k] = 0;
+                    }
+                }
+
+                for (int j = 0; j < prnFileHeader.Colors; j++)
+                {
+                    fs.read((char*)linedata, linesize);
+                    if (j < 4)
+                    {
+                        for (int m = 0; m < width; m++)
+                        {
+                            int dots = ones[linedata_8[m]];
+                            pixvalue[j][m] += dots;
+                            pinkcounts[j] += dots;
+                        }
+                    }
+                    else
+                    {
+                        int dots = CalcDots(linedata, linesize);
+                        pinkcounts[j] += dots;
+                    }
+                }
+
+                if (((i % YScale) == (YScale - 1)) || (i == (prnFileHeader.Height - 1)))
+                {
+                    for (int k = 0; k < width; k++)
+                    {
+                        rawImage[rawpos + k * 4 + 0] = pixvalue[1][k] >= pixmaxv ? 255 : (pixvalue[1][k] << 2);
+                        rawImage[rawpos + k * 4 + 1] = pixvalue[2][k] >= pixmaxv ? 255 : (pixvalue[2][k] << 2);
+                        rawImage[rawpos + k * 4 + 2] = pixvalue[3][k] >= pixmaxv ? 255 : (pixvalue[3][k] << 2);
+                        rawImage[rawpos + k * 4 + 3] = pixvalue[0][k] >= pixmaxv ? 255 : (pixvalue[0][k] << 2);
+                    }
+                    rawpos += rawStride;
+                }
+
+                if ((i & 0x3f) == 0x3f)
+                {
+                    if (percent)
+                        *percent = i * 100 / prnFileHeader.Height;
+                    if (update)
+                        update();
+                }
+            }
+        };
+
+        auto func16 = [&]() {
+            auto linedata = buf.get();
+            uint16_t* linedata_16 = (uint16_t*)linedata;
+
+            int pixmaxv = XScale * YScale;
+
+            int rawpos = 0;
+            for (int i = 0; i < prnFileHeader.Height; i++)
+            {
+                if ((i & 0x07) == 0)
+                {
+                    for (int j = 0; j < 4; j++)
+                    {
+                        for (int k = 0; k < width; k++)
+                            pixvalue[j][k] = 0;
+                    }
+                }
+
+                for (int j = 0; j < prnFileHeader.Colors; j++)
+                {
+                    fs.read((char*)linedata, linesize);
+                    if (j < 4)
+                    {
+                        for (int m = 0; m < width; m++)
+                        {
+                            int dots = BitCount2(linedata_16[m]);
+                            pixvalue[j][m] += dots;
+                            pinkcounts[j] += dots;
+                        }
+                    }
+                    else
+                    {
+                        int dots = CalcDots(linedata, linesize);
+                        pinkcounts[j] += dots;
+                    }
+                }
+
+                if (((i % YScale) == (YScale - 1)) || (i == (prnFileHeader.Height - 1)))
+                {
+                    for (int k = 0; k < width; k++)
+                    {
+                        rawImage[rawpos + k * 4 + 0] = pixvalue[1][k] >= pixmaxv ? 255 : (pixvalue[1][k]);
+                        rawImage[rawpos + k * 4 + 1] = pixvalue[2][k] >= pixmaxv ? 255 : (pixvalue[2][k]);
+                        rawImage[rawpos + k * 4 + 2] = pixvalue[3][k] >= pixmaxv ? 255 : (pixvalue[3][k]);
+                        rawImage[rawpos + k * 4 + 3] = pixvalue[0][k] >= pixmaxv ? 255 : (pixvalue[0][k]);
+                    }
+                    rawpos += rawStride;
+                }
+
+                if ((i & 0x3f) == 0x3f)
+                {
+                    if (percent)
+                        *percent = i * 100 / prnFileHeader.Height;
+                    if (update)
+                        update();
+                }
+            }
+        };
+
+        auto func32 = [&]() {
+            auto linedata = buf.get();
+            uint32_t* linedata_32 = (uint32_t*)linedata;
+
+            int pixmaxv = XScale * YScale;
+            int pixmaxdiv = pixmaxv / 256;
+            int xunit = XScale / 32;
+
+            int rawpos = 0;
+            for (int i = 0; i < prnFileHeader.Height; i++)
+            {
+                if ((i % YScale) == 0)
+                {
+                    for (int j = 0; j < 4; j++)
+                    {
+                        for (int k = 0; k < width; k++)
+                            pixvalue[j][k] = 0;
+                    }
+                }
+
+                for (int j = 0; j < prnFileHeader.Colors; j++)
+                {
+                    fs.read((char*)linedata, linesize);
+                    if (j < 4)
+                    {
+                        for (int m = 0; m < width; m++)
+                        {
+                            int dots = 0;
+                            for (int k = 0; k < xunit; k++)
+                                dots += BitCount4(linedata_32[m * xunit + k]);
+                            pixvalue[j][m] += dots;
+                            pinkcounts[j] += dots;
+                        }
+                    }
+                    else
+                    {
+                        int dots = CalcDots(linedata, linesize);
+                        pinkcounts[j] += dots;
+                    }
+                }
+
+                if (((i % YScale) == (YScale - 1)) || (i == (prnFileHeader.Height - 1)))
+                {
+                    for (int k = 0; k < width; k++)
+                    {
+                        rawImage[rawpos + k * 4 + 0] = pixvalue[1][k] >= pixmaxv ? 255 : (pixvalue[1][k] / pixmaxdiv);
+                        rawImage[rawpos + k * 4 + 1] = pixvalue[2][k] >= pixmaxv ? 255 : (pixvalue[2][k] / pixmaxdiv);
+                        rawImage[rawpos + k * 4 + 2] = pixvalue[3][k] >= pixmaxv ? 255 : (pixvalue[3][k] / pixmaxdiv);
+                        rawImage[rawpos + k * 4 + 3] = pixvalue[0][k] >= pixmaxv ? 255 : (pixvalue[0][k] / pixmaxdiv);
+                    }
+                    rawpos += rawStride;
+                }
+
+                if ((i & 0x3ff) == 0x3ff)
+                {
+                    if (percent)
+                        *percent = i * 100 / prnFileHeader.Height;
+                    if (update)
+                        update();
+                }
+            }
+        };
+
+        if (XScale == 8)
+            func8();
+        else if (XScale == 16)
+            func16();
+        else
+            func32();
+
+        if (percent)
+            *percent = 100;
+        if (update)
             update();
     }
 }

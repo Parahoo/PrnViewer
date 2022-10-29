@@ -4,6 +4,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -276,5 +277,79 @@ namespace PrnViewer
                     rawImage, rawStride);
             });
         }
+
+        private static void CalcScale(PrnFileHeader prnFileHeader, ref int xScale, ref int yScale)
+        {
+            int w = prnFileHeader.Width;
+            int h = prnFileHeader.Height;
+            int xdpi = prnFileHeader.ResolutionX;
+            int ydpi = prnFileHeader.ResolutionY;
+            int dpiScale = (ydpi > xdpi) ? ydpi / xdpi : 1;
+
+            xScale = (w + 999) / 1000;
+            if (xScale < 8)
+                xScale = 8;
+            else if (xScale < 16)
+                xScale = 16; 
+            else
+                xScale = (xScale + 31) / 32 * 32;
+            yScale = xScale * dpiScale;
+        }
+
+        [DllImport("PrnDataProcess.dll", CallingConvention = CallingConvention.Cdecl)]
+        static extern void CalcPrnImageAndInkDots(string filename, int XScale, int YScale, IntPtr rawImage, IntPtr inkcounts, ref int percent, Action action);
+
+        internal static void CalcBitmapAndInkDots(string filename, 
+            Action<int, int, double, double, PixelFormat, Array, int> updateimg,
+            Action<Int64[]> updateink, Action<int> updatepercent)
+        {
+            var prnFileHeader = PrnFileReader.ReadHeader(filename);
+            if (!prnFileHeader.IsOk())
+                return;
+
+            int XScale = 32;
+            int YScale = 320;
+            CalcScale(prnFileHeader, ref XScale, ref YScale);
+
+            int width = (prnFileHeader.Width + XScale-1) / XScale;
+            int height = (prnFileHeader.Height + YScale-1) / YScale;
+            int XDpi = prnFileHeader.ResolutionX;
+            int YDpi = prnFileHeader.ResolutionY / (YScale / XScale);
+
+            var pf = PixelFormats.Cmyk32;
+            var rawStride = (width * pf.BitsPerPixel + 7) / 8;
+            var imgbufsize = rawStride * height;
+            var ptr = Marshal.AllocHGlobal(imgbufsize);
+
+            Int64[] inkcounts = new Int64[prnFileHeader.Colors];
+            for (int i = 0; i < inkcounts.Length; i++)
+                inkcounts[i] = 0;
+            var pinkcounts = Marshal.AllocHGlobal(inkcounts.Length * 8);
+            Marshal.Copy(inkcounts, 0, pinkcounts, inkcounts.Length);
+
+            int percent = 0;
+            int ShowIndex = 0;
+
+            CalcPrnImageAndInkDots(filename, XScale, YScale, ptr, pinkcounts, ref percent, () => {
+
+                Marshal.Copy(pinkcounts, inkcounts, 0, inkcounts.Length);
+                updateink?.Invoke(inkcounts);
+                updatepercent?.Invoke(percent);
+
+                if(percent / 10 >= ShowIndex)
+                {
+                    var rawImage = new byte[rawStride * height];
+                    Marshal.Copy(ptr, rawImage, 0, rawStride * height);
+                    updateimg?.Invoke(width, height,
+                        XDpi, YDpi, pf,
+                        rawImage, rawStride);
+                    ShowIndex++;
+                }
+            });
+            Marshal.FreeHGlobal(pinkcounts);
+            Marshal.FreeHGlobal(ptr);
+
+        }
+
     }
 }
